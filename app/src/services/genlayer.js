@@ -1,87 +1,158 @@
-import { createClient, createAccount as createGenLayerAccount, generatePrivateKey } from "genlayer-js";
+import { createClient, createAccount as createGenLayerAccount } from "genlayer-js";
 import { simulator } from "genlayer-js/chains";
+import { createWalletClient, custom } from "viem";
 
-// Contract ABI — matches the GenInsure contract methods
-export const CONTRACT_ABI = {
-  create_policy: {
-    type: "write",
-    params: ["category", "payout", "params"],
-  },
-  submit_claim: {
-    type: "write",
-    params: ["policy_id"],
-  },
-  get_policy: {
-    type: "view",
-    params: ["policy_id"],
-  },
-  get_all_policies: {
-    type: "view",
-    params: [],
-  },
-  get_my_policies: {
-    type: "view",
-    params: ["owner_address"],
-  },
-  get_stats: {
-    type: "view",
-    params: [],
-  },
-};
+// ── Chain config ──────────────────────────────────
+export const client = createClient({ chain: simulator });
 
-// Account management
-const accountPrivateKey = localStorage.getItem("accountPrivateKey")
-  ? localStorage.getItem("accountPrivateKey")
-  : null;
-export const account = accountPrivateKey ? createGenLayerAccount(accountPrivateKey) : null;
+// ── Reactive account state ─────────────────────────
+let _account = null;
+const listeners = [];
 
-export const createAccount = () => {
-  const newAccountPrivateKey = generatePrivateKey();
-  localStorage.setItem("accountPrivateKey", newAccountPrivateKey);
-  return createGenLayerAccount(newAccountPrivateKey);
-};
-
-export const removeAccount = () => {
-  localStorage.removeItem("accountPrivateKey");
-};
-
-export const client = createClient({ chain: simulator, account: null });
-
-// Contract interaction helpers
-let contractAddress = localStorage.getItem("contractAddress") || null;
-
-export const setContractAddress = (address) => {
-  contractAddress = address;
-  localStorage.setItem("contractAddress", address);
-};
-
-export const getContractAddress = () => contractAddress;
-
-/**
- * Read from contract (view method)
- */
-export async function callView(method, args = []) {
-  if (!contractAddress) throw new Error("No contract address set. Deploy first.");
-  const result = await client.call({
-    contractAddress,
-    method,
-    args,
-  });
-  return result;
+function notifyListeners() {
+  listeners.forEach((fn) => fn(_account));
 }
 
-/**
- * Write to contract (state-changing method)
- */
+export function onAccountChange(fn) {
+  listeners.push(fn);
+  if (_account) fn(_account); // push current state immediately
+  return () => {
+    const idx = listeners.indexOf(fn);
+    if (idx >= 0) listeners.splice(idx, 1);
+  };
+}
+
+export function getAccount() {
+  return _account;
+}
+
+// ── EVM Wallet Connection (MetaMask / Rabby / etc.) ─
+export async function connectWallet() {
+  if (!window.ethereum) {
+    throw new Error(
+      "No EVM wallet detected. Please install MetaMask, Rabby, or another Web3 wallet."
+    );
+  }
+
+  // Request accounts — triggers the wallet popup
+  const [address] = await window.ethereum.request({
+    method: "eth_requestAccounts",
+  });
+
+  if (!address) throw new Error("No account selected");
+
+  // Create a viem wallet client from the browser provider
+  const walletClient = createWalletClient({
+    chain: {
+      id: simulator.id,
+      name: simulator.name,
+      nativeCurrency: simulator.nativeCurrency,
+      rpcUrls: simulator.rpcUrls,
+    },
+    transport: custom(window.ethereum),
+  });
+
+  // Build the account object genlayer-js needs (matches what createAccount returns)
+  _account = {
+    address: address,
+    type: "evm-wallet",
+    // genlayer-js write() needs a signMessage method
+    signMessage: async ({ message }) => {
+      return walletClient.signMessage({
+        account: address,
+        message: typeof message === "string" ? message : message.raw,
+      });
+    },
+    // Some versions of genlayer-js expect signTransaction
+    signTransaction: async (tx) => {
+      return walletClient.signTransaction({
+        account: address,
+        ...tx,
+      });
+    },
+  };
+
+  // Listen for account changes from the wallet
+  window.ethereum.on("accountsChanged", (accounts) => {
+    if (accounts.length === 0) {
+      disconnectWallet();
+    } else if (accounts[0] !== _account?.address) {
+      _account = { ..._account, address: accounts[0] };
+      notifyListeners();
+    }
+  });
+
+  window.ethereum.on("chainChanged", () => {
+    // Reload on chain change — genlayer-js needs to reinitialize
+    window.location.reload();
+  });
+
+  notifyListeners();
+  return _account;
+}
+
+export function disconnectWallet() {
+  _account = null;
+  // Remove ethereum listeners
+  if (window.ethereum) {
+    window.ethereum.removeAllListeners?.("accountsChanged");
+    window.ethereum.removeAllListeners?.("chainChanged");
+  }
+  notifyListeners();
+}
+
+export function isEVMConnected() {
+  return _account !== null && _account.type === "evm-wallet";
+}
+
+// ── Legacy: private-key account (fallback / dev mode) ─
+export function createPrivateKeyAccount() {
+  const pk = localStorage.getItem("accountPrivateKey");
+  if (!pk) throw new Error("No stored private key");
+  _account = createGenLayerAccount(pk);
+  notifyListeners();
+  return _account;
+}
+
+export async function generateAndSaveAccount() {
+  const { generatePrivateKey } = await import("genlayer-js");
+  const pk = generatePrivateKey();
+  localStorage.setItem("accountPrivateKey", pk);
+  _account = createGenLayerAccount(pk);
+  notifyListeners();
+  return _account;
+}
+
+export function removePrivateKey() {
+  localStorage.removeItem("accountPrivateKey");
+}
+
+// ── Contract interaction ──────────────────────────
+let contractAddress = localStorage.getItem("contractAddress") || null;
+
+export function setContractAddress(address) {
+  contractAddress = address;
+  localStorage.setItem("contractAddress", address);
+}
+
+export function getContractAddress() {
+  return contractAddress;
+}
+
+export async function callView(method, args = []) {
+  if (!contractAddress) throw new Error("No contract address set. Deploy first.");
+  return client.call({ contractAddress, method, args });
+}
+
 export async function callWrite(method, args = [], value = "0") {
   if (!contractAddress) throw new Error("No contract address set. Deploy first.");
-  if (!account) throw new Error("No account. Create one first.");
+  if (!_account) throw new Error("No wallet connected.");
 
   const tx = await client.write({
     contractAddress,
     method,
     args,
-    account,
+    account: _account,
     value,
   });
 
@@ -91,7 +162,7 @@ export async function callWrite(method, args = [], value = "0") {
     retries: 200,
   });
 
-  if (receipt.consensus_data?.leader_receipt[0]?.execution_result !== "SUCCESS") {
+  if (receipt.consensus_data?.leader_receipt?.[0]?.execution_result !== "SUCCESS") {
     throw new Error(`Transaction failed: ${JSON.stringify(receipt)}`);
   }
 

@@ -14,11 +14,11 @@
           <div v-if="account" class="flex items-center gap-2">
             <span class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
             <span class="text-sm text-gray-300 font-mono">{{ shortAddress }}</span>
-            <button @click="disconnect" class="text-xs text-gray-500 hover:text-red-400 ml-2">Disconnect</button>
+            <button @click="disconnectHandler" class="text-xs text-gray-500 hover:text-red-400 ml-2">Disconnect</button>
           </div>
           <button
             v-else
-            @click="connectWallet"
+            @click="connectWalletHandler"
             class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-lg text-sm font-medium transition"
           >
             Connect Wallet
@@ -332,11 +332,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import {
-  client, account, createAccount, removeAccount,
+  client, getAccount, connectWallet, disconnectWallet,
+  isEVMConnected, onAccountChange,
   setContractAddress, getContractAddress,
-  callView, callWrite, CONTRACT_ABI
+  callView, callWrite,
 } from "../services/genlayer.js";
 
 // State
@@ -348,6 +349,8 @@ const myPolicies = ref([]);
 const allPolicies = ref([]);
 const stats = ref(null);
 const toast = ref(null);
+const account = ref(null);  // reactive account state
+let unsubAccount = null;
 
 // Form state
 const form = ref({});
@@ -384,8 +387,8 @@ const tabs = [
 
 // Computed
 const shortAddress = computed(() => {
-  if (!account) return "";
-  const addr = account.address;
+  if (!account.value) return "";
+  const addr = account.value.address;
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 });
 
@@ -395,17 +398,22 @@ const showToast = (message, type = "info") => {
   setTimeout(() => { toast.value = null; }, 5000);
 };
 
-const connectWallet = () => {
-  const acct = createAccount();
-  showToast(`Wallet connected: ${acct.address.slice(0, 10)}...`, "success");
-  refreshAll();
+const connectWalletHandler = async () => {
+  try {
+    const acct = await connectWallet();
+    account.value = acct;
+    showToast(`Wallet connected: ${acct.address.slice(0, 10)}...`, "success");
+    refreshAll();
+  } catch (err) {
+    showToast(`Failed to connect: ${err.message}`, "error");
+  }
 };
 
-const disconnect = () => {
-  removeAccount();
+const disconnectHandler = () => {
+  disconnectWallet();
+  account.value = null;
   showToast("Wallet disconnected", "info");
   myPolicies.value = [];
-  window.location.reload();
 };
 
 const getCategoryIcon = (cat) => {
@@ -454,7 +462,7 @@ const formatJson = (str) => {
 
 // Actions
 const createPolicy = async () => {
-  if (!account) {
+  if (!account.value) {
     showToast("Connect wallet first", "error");
     return;
   }
@@ -509,7 +517,7 @@ const createPolicy = async () => {
 };
 
 const submitClaim = async (policyId) => {
-  if (!account) {
+  if (!account.value) {
     showToast("Connect wallet first", "error");
     return;
   }
@@ -531,7 +539,7 @@ const loadMyPolicies = async () => {
   if (!account || !getContractAddress()) return;
   loadingPolicies.value = true;
   try {
-    const result = await callView("get_my_policies", [account.address]);
+    const result = await callView("get_my_policies", [account.value.address]);
     myPolicies.value = Object.values(result || {}).sort((a, b) =>
       b.created_at?.localeCompare(a.created_at || "") || 0
     );
@@ -576,12 +584,28 @@ const refreshAll = async () => {
 };
 
 // Init
-onMounted(async () => {
+onMounted(() => {
   resetForm();
-  // Check if there's a saved contract address
+
+  // Listen for account changes from EVM wallet
+  unsubAccount = onAccountChange((acct) => {
+    account.value = acct;
+  });
+
+  // Restore account if already connected
+  const existing = getAccount();
+  if (existing) {
+    account.value = existing;
+  }
+
+  // Load data if contract is deployed
   const savedAddress = getContractAddress();
   if (savedAddress) {
-    await refreshAll();
+    refreshAll();
   }
+});
+
+onUnmounted(() => {
+  if (unsubAccount) unsubAccount();
 });
 </script>
