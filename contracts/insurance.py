@@ -36,20 +36,29 @@ class GenInsure(gl.Contract):
 
     def _check_flight_delay(self, flight_number: str, date: str, threshold_minutes: str) -> str:
         def get_flight_result() -> str:
-            url = f"https://api.aviationstack.com/v1/flights?flight_iata={flight_number}&flight_date={date}"
+            # aviationstack needs an access_key (not safe to hardcode on-chain);
+            # fall back to web search like event_cancellation does.
+            search_query = f"flight {flight_number} {date} delayed status actual delay minutes"
+            url = f"https://www.bing.com/search?q={search_query.replace(' ', '+')}"
             web_data = gl.nondet.web.render(url, mode="text")
 
             task = f"""
 Flight insurance claim verification. Check if flight {flight_number} on {date} was delayed more than {threshold_minutes} minutes.
 
-API data: {web_data[:3000]}
+Search results: {web_data[:3000]}
 
 Return JSON with keys: delayed (bool), actual_delay_minutes (int), flight_status (str), error (str or null).
+If no reliable data found, set delayed=false and error="no data".
 Return ONLY valid JSON, no markdown, no extra text.
 """
             return self._normalize_json(gl.nondet.exec_prompt(task))
 
-        result_json = json.loads(gl.eq_principle.strict_eq(get_flight_result))
+        result_json = json.loads(
+            gl.eq_principle.prompt_comparative(
+                get_flight_result,
+                principle=f"Verify if flight {flight_number} on {date} was delayed more than {threshold_minutes} minutes. Validators must agree on delayed=true/false. actual_delay_minutes may vary within 30 minutes.",
+            )
+        )
         return json.dumps(result_json, sort_keys=True)
 
     def _check_weather_parametric(self, lat: str, lon: str, param: str, threshold: str, comparison: str) -> str:
