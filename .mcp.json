@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "genlayer-docs": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "ghcr.io/genlayerlabs/genlayer-docs/docs-mcp-server:sha-19558ee2a9ee812985fd8a02c78aaccdf47c4c6d"
+      ]
+    }
+  }
+}

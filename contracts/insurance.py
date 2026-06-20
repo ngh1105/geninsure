@@ -1,4 +1,5 @@
-# { "Depends": "py-genlayer:test" }
+# v0.2.17
+# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 import json
 from dataclasses import dataclass
@@ -29,6 +30,10 @@ class GenInsure(gl.Contract):
     def __init__(self):
         self.counter = u256(0)
 
+    def _normalize_json(self, text: str) -> str:
+        cleaned = text.replace("```json", "").replace("```", "").strip()
+        return json.dumps(json.loads(cleaned), sort_keys=True)
+
     def _check_flight_delay(self, flight_number: str, date: str, threshold_minutes: str) -> str:
         def get_flight_result() -> str:
             url = f"https://api.aviationstack.com/v1/flights?flight_iata={flight_number}&flight_date={date}"
@@ -42,12 +47,10 @@ API data: {web_data[:3000]}
 Return JSON with keys: delayed (bool), actual_delay_minutes (int), flight_status (str), error (str or null).
 Return ONLY valid JSON, no markdown, no extra text.
 """
-            result = gl.exec_prompt(task)
-            result = result.replace("```json", "").replace("```", "").strip()
-            return json.dumps(json.loads(result), sort_keys=True)
+            return self._normalize_json(gl.exec_prompt(task))
 
         result_json = json.loads(gl.eq_principle_strict_eq(get_flight_result))
-        return json.dumps(result_json)
+        return json.dumps(result_json, sort_keys=True)
 
     def _check_weather_parametric(self, lat: str, lon: str, param: str, threshold: str, comparison: str) -> str:
         def get_weather_result() -> str:
@@ -64,12 +67,10 @@ Parameters: rain_sum=rainfall_mm, temperature_2m_max=max_temp_C, wind_speed_10m_
 Return JSON with keys: triggered (bool), actual_value (float), unit (str), date (str), error (str or null).
 Return ONLY valid JSON, no markdown, no extra text.
 """
-            result = gl.exec_prompt(task)
-            result = result.replace("```json", "").replace("```", "").strip()
-            return json.dumps(json.loads(result), sort_keys=True)
+            return self._normalize_json(gl.exec_prompt(task))
 
         result_json = json.loads(gl.eq_principle_strict_eq(get_weather_result))
-        return json.dumps(result_json)
+        return json.dumps(result_json, sort_keys=True)
 
     def _check_event_cancellation(self, event_name: str, event_date: str, venue: str) -> str:
         def get_event_result() -> str:
@@ -85,9 +86,7 @@ Search results: {web_data[:3000]}
 Return JSON with keys: cancelled (bool), confidence (str: high/medium/low), evidence (str), error (str or null).
 Return ONLY valid JSON, no markdown, no extra text.
 """
-            result = gl.exec_prompt(task)
-            result = result.replace("```json", "").replace("```", "").strip()
-            return json.dumps(json.loads(result), sort_keys=True)
+            return self._normalize_json(gl.exec_prompt(task))
 
         result_json = json.loads(
             gl.eq_principle_prompt_comparative(
@@ -95,7 +94,7 @@ Return ONLY valid JSON, no markdown, no extra text.
                 principle="Verify if event was cancelled. Must agree on cancelled=true/false. Confidence may vary by one level.",
             )
         )
-        return json.dumps(result_json)
+        return json.dumps(result_json, sort_keys=True)
 
     @gl.public.write
     def create_policy(self, category: str, payout: str, params: str) -> str:
@@ -103,7 +102,14 @@ Return ONLY valid JSON, no markdown, no extra text.
         if category not in valid:
             raise Exception(f"Invalid category: {category}")
 
-        parsed = json.loads(params)
+        if isinstance(params, str):
+            parsed = json.loads(params)
+            params_json = json.dumps(parsed, sort_keys=True)
+        else:
+            parsed = params
+            params_json = json.dumps(params, sort_keys=True)
+
+        payout_str = str(payout)
 
         if category == "flight_delay":
             for r in ["flight_number", "date", "threshold_minutes"]:
@@ -119,21 +125,22 @@ Return ONLY valid JSON, no markdown, no extra text.
                     raise Exception(f"Missing param: {r}")
 
         sender = gl.message.sender_address
-        pid = f"{category}_{self.counter}_{sender.as_hex[:8]}"
+        counter_str = str(self.counter)
+        pid = f"{category}_{counter_str}_{sender.as_hex[:8]}"
 
         p = Policy(
             id=pid,
             owner=sender.as_hex,
             category=category,
             premium=str(gl.message.value),
-            payout=payout,
+            payout=payout_str,
             is_active=True,
             has_claimed=False,
             claim_resolved=False,
             claim_approved=False,
-            params=params,
+            params=params_json,
             claim_result="",
-            created_at=str(self.counter),
+            created_at=counter_str,
         )
         self.policies[pid] = p
         self.counter += u256(1)
@@ -155,6 +162,7 @@ Return ONLY valid JSON, no markdown, no extra text.
             raise Exception("Already claimed")
 
         p.has_claimed = True
+        self.policies[policy_id] = p
         parsed = json.loads(p.params)
 
         try:
@@ -184,46 +192,88 @@ Return ONLY valid JSON, no markdown, no extra text.
             else:
                 raise Exception(f"Unknown: {p.category}")
         except Exception as e:
-            p.claim_result = json.dumps({"error": str(e)})
+            p.has_claimed = False
+            p.claim_result = json.dumps({"error": str(e)}, sort_keys=True)
+            self.policies[policy_id] = p
             return
 
         p.claim_resolved = True
         p.claim_approved = approved
-        p.claim_result = json.dumps(result)
+        p.claim_result = json.dumps(result, sort_keys=True)
         p.is_active = False
+        self.policies[policy_id] = p
 
     @gl.public.view
     def get_policy(self, policy_id: str) -> dict:
         if policy_id not in self.policies:
             raise Exception("Policy not found")
         p = self.policies[policy_id]
-        return {"id": p.id, "owner": p.owner, "category": p.category,
-                "premium": p.premium, "payout": p.payout,
-                "is_active": p.is_active, "has_claimed": p.has_claimed,
-                "claim_resolved": p.claim_resolved, "claim_approved": p.claim_approved,
-                "params": p.params, "claim_result": p.claim_result, "created_at": p.created_at}
+        return {
+            "id": p.id,
+            "owner": p.owner,
+            "category": p.category,
+            "premium": p.premium,
+            "payout": p.payout,
+            "is_active": p.is_active,
+            "has_claimed": p.has_claimed,
+            "claim_resolved": p.claim_resolved,
+            "claim_approved": p.claim_approved,
+            "params": p.params,
+            "claim_result": p.claim_result,
+            "created_at": p.created_at,
+        }
 
     @gl.public.view
     def get_all_policies(self) -> dict:
         result = {}
         for k, p in self.policies.items():
-            result[k] = {"id": p.id, "owner": p.owner, "category": p.category,
-                         "premium": p.premium, "payout": p.payout,
-                         "is_active": p.is_active, "has_claimed": p.has_claimed,
-                         "claim_resolved": p.claim_resolved, "claim_approved": p.claim_approved}
+            result[k] = {
+                "id": p.id,
+                "owner": p.owner,
+                "category": p.category,
+                "premium": p.premium,
+                "payout": p.payout,
+                "is_active": p.is_active,
+                "has_claimed": p.has_claimed,
+                "claim_resolved": p.claim_resolved,
+                "claim_approved": p.claim_approved,
+            }
         return result
 
     @gl.public.view
     def get_my_policies(self, owner_address: str) -> dict:
         result = {}
+        owner_lower = str(owner_address).lower()
         for k, p in self.policies.items():
-            if p.owner == owner_address:
-                result[k] = {"id": p.id, "owner": p.owner, "category": p.category,
-                             "premium": p.premium, "payout": p.payout,
-                             "is_active": p.is_active, "has_claimed": p.has_claimed,
-                             "claim_resolved": p.claim_resolved, "claim_approved": p.claim_approved}
+            if str(p.owner).lower() == owner_lower:
+                result[k] = {
+                    "id": p.id,
+                    "owner": p.owner,
+                    "category": p.category,
+                    "premium": p.premium,
+                    "payout": p.payout,
+                    "is_active": p.is_active,
+                    "has_claimed": p.has_claimed,
+                    "claim_resolved": p.claim_resolved,
+                    "claim_approved": p.claim_approved,
+                }
         return result
 
     @gl.public.view
     def get_stats(self) -> dict:
-        return {"total_policies": self.counter}
+        total_premiums = 0
+        total_payouts = 0
+        for k, p in self.policies.items():
+            try:
+                total_premiums += int(p.premium)
+            except Exception:
+                pass
+            try:
+                total_payouts += int(p.payout)
+            except Exception:
+                pass
+        return {
+            "total_policies": str(self.counter),
+            "total_premiums": str(total_premiums),
+            "total_payouts": str(total_payouts),
+        }

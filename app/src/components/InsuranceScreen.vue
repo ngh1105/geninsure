@@ -536,7 +536,7 @@ const submitClaim = async (policyId) => {
 };
 
 const loadMyPolicies = async () => {
-  if (!account || !getContractAddress()) return;
+  if (!account.value || !getContractAddress()) return;
   loadingPolicies.value = true;
   try {
     const result = await callView("get_my_policies", [account.value.address]);

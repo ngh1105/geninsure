@@ -1,9 +1,10 @@
 import { createClient, createAccount as createGenLayerAccount } from "genlayer-js";
-import { simulator } from "genlayer-js/chains";
+import { studionet } from "genlayer-js/chains";
 import { createWalletClient, custom } from "viem";
 
-// ── Chain config ──────────────────────────────────
-export const client = createClient({ chain: simulator });
+// ── Chain config: dùng studionet thật từ genlayer-js 1.1.8
+// (id 61999, có sẵn consensusMainContract — không hand-roll nữa) ──
+export const client = createClient({ chain: studionet });
 
 // ── Reactive account state ─────────────────────────
 let _account = null;
@@ -34,36 +35,26 @@ export async function connectWallet() {
     );
   }
 
-  // Request accounts — triggers the wallet popup
   const [address] = await window.ethereum.request({
     method: "eth_requestAccounts",
   });
 
   if (!address) throw new Error("No account selected");
 
-  // Create a viem wallet client from the browser provider
   const walletClient = createWalletClient({
-    chain: {
-      id: simulator.id,
-      name: simulator.name,
-      nativeCurrency: simulator.nativeCurrency,
-      rpcUrls: simulator.rpcUrls,
-    },
+    chain: studionet,
     transport: custom(window.ethereum),
   });
 
-  // Build the account object genlayer-js needs (matches what createAccount returns)
   _account = {
     address: address,
     type: "evm-wallet",
-    // genlayer-js write() needs a signMessage method
     signMessage: async ({ message }) => {
       return walletClient.signMessage({
         account: address,
         message: typeof message === "string" ? message : message.raw,
       });
     },
-    // Some versions of genlayer-js expect signTransaction
     signTransaction: async (tx) => {
       return walletClient.signTransaction({
         account: address,
@@ -72,7 +63,6 @@ export async function connectWallet() {
     },
   };
 
-  // Listen for account changes from the wallet
   window.ethereum.on("accountsChanged", (accounts) => {
     if (accounts.length === 0) {
       disconnectWallet();
@@ -83,7 +73,6 @@ export async function connectWallet() {
   });
 
   window.ethereum.on("chainChanged", () => {
-    // Reload on chain change — genlayer-js needs to reinitialize
     window.location.reload();
   });
 
@@ -93,7 +82,6 @@ export async function connectWallet() {
 
 export function disconnectWallet() {
   _account = null;
-  // Remove ethereum listeners
   if (window.ethereum) {
     window.ethereum.removeAllListeners?.("accountsChanged");
     window.ethereum.removeAllListeners?.("chainChanged");
@@ -128,7 +116,16 @@ export function removePrivateKey() {
 }
 
 // ── Contract interaction ──────────────────────────
-let contractAddress = localStorage.getItem("contractAddress") || null;
+// .env address wins over localStorage: a stale localStorage entry from an
+// older deployment (different ABI) must not redirect reads/writes at a
+// contract that returns a mismatched shape (e.g. get_stats -> u256 vs dict).
+const ENV_CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS || null;
+let contractAddress =
+  ENV_CONTRACT_ADDRESS || localStorage.getItem("contractAddress") || null;
+if (ENV_CONTRACT_ADDRESS) {
+  // keep localStorage synced so reloads / dev tools agree with .env
+  localStorage.setItem("contractAddress", ENV_CONTRACT_ADDRESS);
+}
 
 export function setContractAddress(address) {
   contractAddress = address;
@@ -139,18 +136,19 @@ export function getContractAddress() {
   return contractAddress;
 }
 
+// genlayer-js 1.1.8 dùng readContract/writeContract (KHÔNG phải call/write)
 export async function callView(method, args = []) {
   if (!contractAddress) throw new Error("No contract address set. Deploy first.");
-  return client.call({ contractAddress, method, args });
+  return client.readContract({ address: contractAddress, functionName: method, args });
 }
 
 export async function callWrite(method, args = [], value = "0") {
   if (!contractAddress) throw new Error("No contract address set. Deploy first.");
   if (!_account) throw new Error("No wallet connected.");
 
-  const tx = await client.write({
-    contractAddress,
-    method,
+  const tx = await client.writeContract({
+    address: contractAddress,
+    functionName: method,
     args,
     account: _account,
     value,
