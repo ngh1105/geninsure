@@ -7,3 +7,6 @@ __pycache__/
 *.log
 .tmp/
 temp/
+
+# studionet local state (last deployed contract address)
+.studionet_addr

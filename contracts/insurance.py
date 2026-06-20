@@ -37,7 +37,7 @@ class GenInsure(gl.Contract):
     def _check_flight_delay(self, flight_number: str, date: str, threshold_minutes: str) -> str:
         def get_flight_result() -> str:
             url = f"https://api.aviationstack.com/v1/flights?flight_iata={flight_number}&flight_date={date}"
-            web_data = gl.get_webpage(url, mode="text")
+            web_data = gl.nondet.web.render(url, mode="text")
 
             task = f"""
 Flight insurance claim verification. Check if flight {flight_number} on {date} was delayed more than {threshold_minutes} minutes.
@@ -47,15 +47,15 @@ API data: {web_data[:3000]}
 Return JSON with keys: delayed (bool), actual_delay_minutes (int), flight_status (str), error (str or null).
 Return ONLY valid JSON, no markdown, no extra text.
 """
-            return self._normalize_json(gl.exec_prompt(task))
+            return self._normalize_json(gl.nondet.exec_prompt(task))
 
-        result_json = json.loads(gl.eq_principle_strict_eq(get_flight_result))
+        result_json = json.loads(gl.eq_principle.strict_eq(get_flight_result))
         return json.dumps(result_json, sort_keys=True)
 
     def _check_weather_parametric(self, lat: str, lon: str, param: str, threshold: str, comparison: str) -> str:
         def get_weather_result() -> str:
             url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily={param}&timezone=auto&forecast_days=2"
-            web_data = gl.get_webpage(url, mode="text")
+            web_data = gl.nondet.web.render(url, mode="text")
 
             task = f"""
 Parametric weather insurance verification. Location ({lat},{lon}), check if {param} is {comparison} {threshold}.
@@ -67,16 +67,16 @@ Parameters: rain_sum=rainfall_mm, temperature_2m_max=max_temp_C, wind_speed_10m_
 Return JSON with keys: triggered (bool), actual_value (float), unit (str), date (str), error (str or null).
 Return ONLY valid JSON, no markdown, no extra text.
 """
-            return self._normalize_json(gl.exec_prompt(task))
+            return self._normalize_json(gl.nondet.exec_prompt(task))
 
-        result_json = json.loads(gl.eq_principle_strict_eq(get_weather_result))
+        result_json = json.loads(gl.eq_principle.strict_eq(get_weather_result))
         return json.dumps(result_json, sort_keys=True)
 
     def _check_event_cancellation(self, event_name: str, event_date: str, venue: str) -> str:
         def get_event_result() -> str:
             search_query = f"{event_name} {venue} cancelled postponed {event_date}"
             url = f"https://www.bing.com/search?q={search_query.replace(' ', '+')}"
-            web_data = gl.get_webpage(url, mode="text")
+            web_data = gl.nondet.web.render(url, mode="text")
 
             task = f"""
 Event insurance claim verification. Check if event "{event_name}" at "{venue}" on {event_date} was cancelled.
@@ -86,10 +86,10 @@ Search results: {web_data[:3000]}
 Return JSON with keys: cancelled (bool), confidence (str: high/medium/low), evidence (str), error (str or null).
 Return ONLY valid JSON, no markdown, no extra text.
 """
-            return self._normalize_json(gl.exec_prompt(task))
+            return self._normalize_json(gl.nondet.exec_prompt(task))
 
         result_json = json.loads(
-            gl.eq_principle_prompt_comparative(
+            gl.eq_principle.prompt_comparative(
                 get_event_result,
                 principle="Verify if event was cancelled. Must agree on cancelled=true/false. Confidence may vary by one level.",
             )
