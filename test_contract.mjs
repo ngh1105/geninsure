@@ -5,7 +5,7 @@
  * Tests: deploy → read → write → read again
  */
 import { createClient, createAccount, generatePrivateKey } from "genlayer-js";
-import { simulator } from "genlayer-js/chains";
+import { studionet, localnet } from "genlayer-js/chains";
 import { readFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -13,25 +13,15 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Chain config ─────────────────────────────────
-// Dùng studionet (không gas fee). Đổi thành simulator nếu muốn test local.
 const NETWORK = process.env.NETWORK || "studionet";
 
-const STUDIONET_CHAIN = {
-  id: 10089603,
-  name: "GenLayer Studio Network",
-  nativeCurrency: { name: "GEN", symbol: "GEN", decimals: 18 },
-  rpcUrls: { default: { http: ["https://studio.genlayer.com/api"] } },
-};
-
-const chain = NETWORK === "localnet" ? simulator : STUDIONET_CHAIN;
+const chain = NETWORK === "localnet" ? localnet : studionet;
 console.log(`🌐 Network: ${chain.name} (${NETWORK})`);
-
 
 // Tạo hoặc dùng account có sẵn
 const EXISTING_PK = process.env.GENLAYER_PK;
+const STUDIONET_PK = process.env.STUDIONET_PK || "0xba5c0f1a10d1fe1cb16dfc03918a2f2d973c6dc35ad5dd0148c03a030ea404a0";
 
-// Trên studionet: dùng private key của account đã có balance
-const STUDIONET_PK = process.env.STUDIONET_PK || null;
 const account = STUDIONET_PK
   ? createAccount(STUDIONET_PK)
   : EXISTING_PK
@@ -40,11 +30,6 @@ const account = STUDIONET_PK
 
 // ── Setup ────────────────────────────────────────
 const client = createClient({ chain, account });
-
-// initConsensus chỉ cần cho localnet/simulator
-if (NETWORK === "localnet") {
-  await client.initializeConsensusSmartContract();
-}
 
 console.log("👛 Account:", account.address);
 console.log("");
@@ -88,9 +73,9 @@ async function read(contractAddress) {
 
   // get_stats
   try {
-    const stats = await client.call({
-      contractAddress,
-      method: "get_stats",
+    const stats = await client.readContract({
+      address: contractAddress,
+      functionName: "get_stats",
       args: [],
     });
     console.log("   get_stats:", JSON.stringify(stats, null, 2));
@@ -100,9 +85,9 @@ async function read(contractAddress) {
 
   // get_all_policies
   try {
-    const all = await client.call({
-      contractAddress,
-      method: "get_all_policies",
+    const all = await client.readContract({
+      address: contractAddress,
+      functionName: "get_all_policies",
       args: [],
     });
     const count = Object.keys(all || {}).length;
@@ -113,9 +98,9 @@ async function read(contractAddress) {
 
   // get_my_policies
   try {
-    const mine = await client.call({
-      contractAddress,
-      method: "get_my_policies",
+    const mine = await client.readContract({
+      address: contractAddress,
+      functionName: "get_my_policies",
       args: [account.address],
     });
     const count = Object.keys(mine || {}).length;
@@ -175,12 +160,11 @@ async function createPolicy(contractAddress) {
     try {
       console.log(`   Creating ${tc.label} policy...`);
 
-      const tx = await client.write({
-        contractAddress,
-        method: "create_policy",
+      const tx = await client.writeContract({
+        address: contractAddress,
+        functionName: "create_policy",
         args: [tc.category, tc.payout, tc.params],
-        account,
-        value: tc.premium,
+        value: 0n,
       });
 
       const receipt = await client.waitForTransactionReceipt({
@@ -193,8 +177,6 @@ async function createPolicy(contractAddress) {
       const execResult = receipt.consensus_data?.leader_receipt?.[0];
       const txResult = receipt.txExecutionResultName || execResult?.execution_result;
       if (txResult === "SUCCESS") {
-        // Trích xuất policy_id từ kết quả (dạng hex encoded string)
-        const returnData = execResult?.genvm_result?.stdout || "";
         console.log(`   ✅ ${tc.label} created (tx: ${tx.slice(0, 10)}...)`);
         createdIds.push({ label: tc.label, tx });
       } else {
@@ -215,9 +197,9 @@ async function readAgain(contractAddress) {
   console.log("📖 READING again after writes...\n");
 
   try {
-    const stats = await client.call({
-      contractAddress,
-      method: "get_stats",
+    const stats = await client.readContract({
+      address: contractAddress,
+      functionName: "get_stats",
       args: [],
     });
     console.log("   get_stats:", JSON.stringify(stats, null, 2));
@@ -226,9 +208,9 @@ async function readAgain(contractAddress) {
   }
 
   try {
-    const mine = await client.call({
-      contractAddress,
-      method: "get_my_policies",
+    const mine = await client.readContract({
+      address: contractAddress,
+      functionName: "get_my_policies",
       args: [account.address],
     });
     const entries = Object.entries(mine || {});

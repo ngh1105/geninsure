@@ -1,4 +1,3 @@
-# v0.2.17
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 import json
@@ -29,6 +28,7 @@ class GenInsure(gl.Contract):
 
     def __init__(self):
         self.counter = u256(0)
+        self.policies = TreeMap[str, Policy]()
 
     def _normalize_json(self, text: str) -> str:
         cleaned = text.replace("```json", "").replace("```", "").strip()
@@ -36,8 +36,6 @@ class GenInsure(gl.Contract):
 
     def _check_flight_delay(self, flight_number: str, date: str, threshold_minutes: str) -> str:
         def get_flight_result() -> str:
-            # aviationstack needs an access_key (not safe to hardcode on-chain);
-            # fall back to web search like event_cancellation does.
             search_query = f"flight {flight_number} {date} delayed status actual delay minutes"
             url = f"https://www.bing.com/search?q={search_query.replace(' ', '+')}"
             web_data = gl.nondet.web.render(url, mode="text")
